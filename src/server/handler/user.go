@@ -3,27 +3,37 @@ package handler
 import (
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/casapps/caspbx/src/server/service"
 )
 
 type UserHandler struct {
-	routePrefix string
-	authService service.AuthService
-	userCookie  SessionCookieConfig
+	routePrefix          string
+	authService          service.AuthService
+	domainService        service.DomainService
+	communicationService service.UserCommunicationsService
+	userCookie           SessionCookieConfig
 }
 
-func NewUserHandler(routePrefix string, authService service.AuthService, userCookie SessionCookieConfig) http.Handler {
+func NewUserHandler(routePrefix string, authService service.AuthService, domainService service.DomainService, userCookie SessionCookieConfig, communicationService ...service.UserCommunicationsService) http.Handler {
+	var resolvedCommunicationService service.UserCommunicationsService
+	if len(communicationService) > 0 {
+		resolvedCommunicationService = communicationService[0]
+	}
 	return UserHandler{
-		routePrefix: routePrefix,
-		authService: authService,
-		userCookie:  userCookie,
+		routePrefix:          routePrefix,
+		authService:          authService,
+		domainService:        domainService,
+		communicationService: resolvedCommunicationService,
+		userCookie:           userCookie,
 	}
 }
 
 func (handler UserHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+	relativePath := routeTail(handler.routePrefix, r.URL.Path)
+	if (relativePath == "" || relativePath == "profile") && r.Method != http.MethodGet && r.Method != http.MethodHead {
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
@@ -47,7 +57,7 @@ func (handler UserHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	switch routeTail(handler.routePrefix, r.URL.Path) {
+	switch relativePath {
 	case "", "profile":
 		if prefersJSON(r.Header.Get("Accept")) {
 			writeJSON(w, http.StatusOK, map[string]any{
@@ -64,6 +74,14 @@ func (handler UserHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		fmt.Fprintf(w, "User: %s\nEmail: %s\nSession expires: %s\n", user.Username, user.AccountEmail, session.ExpiresAt.UTC().Format(time.RFC3339))
 	default:
+		if route, ok := parseUserCommunicationRoute(relativePath); ok {
+			handler.handleUserCommunicationSurface(w, r, route, user, session.ID)
+			return
+		}
+		if relativePath == "domains" || strings.HasPrefix(relativePath, "domains/") {
+			handler.handleDomainSurface(w, r, user)
+			return
+		}
 		http.NotFound(w, r)
 	}
 }

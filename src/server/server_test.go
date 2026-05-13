@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -13,6 +14,14 @@ import (
 	"github.com/casapps/caspbx/src/server/service"
 	"github.com/casapps/caspbx/src/server/store"
 )
+
+type failingRuntimeStore struct {
+	*store.MemoryStore
+}
+
+func (runtimeStore failingRuntimeStore) SaveAsteriskState(context.Context, model.AsteriskState) (model.AsteriskState, error) {
+	return model.AsteriskState{}, errors.New("save failed")
+}
 
 func TestNewApp(t *testing.T) {
 	memoryStore := store.NewMemoryStore()
@@ -131,6 +140,9 @@ func TestNewAppError(t *testing.T) {
 	if _, appError := NewApp(DefaultAPIVersion, "api", "caspbx", "dev", "unknown", ""); appError == nil {
 		t.Fatalf("expected invalid admin path to fail")
 	}
+	if _, appError := NewAppWithStore(DefaultAPIVersion, "admin", "caspbx", "dev", "unknown", "https://example.invalid", config.DefaultConfig().Server, failingRuntimeStore{MemoryStore: store.NewMemoryStore()}); appError == nil || appError.Error() != "save failed" {
+		t.Fatalf("expected asterisk state save failure, got %v", appError)
+	}
 }
 
 func TestSameSiteModeAndDuration(t *testing.T) {
@@ -145,5 +157,43 @@ func TestSameSiteModeAndDuration(t *testing.T) {
 	}
 	if timeDurationHours(2) != 2*time.Hour {
 		t.Fatalf("expected 2 hour duration")
+	}
+}
+
+func TestCustomDomainHelpers(t *testing.T) {
+	serverConfig := config.DefaultConfig().Server
+	serverConfig.Features.CustomDomains.Enabled = true
+
+	constraints := customDomainConstraints(serverConfig)
+	if !constraints.Enabled || constraints.MaxDomainsPerUser != serverConfig.Features.CustomDomains.MaxDomainsPerUser {
+		t.Fatalf("unexpected custom domain constraints %+v", constraints)
+	}
+	if hosts := platformHosts("https://pbx.example.com"); len(hosts) != 1 || hosts[0] != "pbx.example.com" {
+		t.Fatalf("unexpected platform hosts %+v", hosts)
+	}
+	if hosts := platformHosts("://bad-url"); hosts != nil {
+		t.Fatalf("expected invalid platform host parsing to return nil, got %+v", hosts)
+	}
+}
+
+func TestAsteriskStateHelper(t *testing.T) {
+	serverConfig := config.DefaultConfig().Server
+	serverConfig.Asterisk.DetectedVersion = "20.5.1"
+	serverConfig.Asterisk.DetectionStatus = "detected"
+	serverConfig.Asterisk.HealthStatus = "ready"
+	serverConfig.Asterisk.ChannelDrivers = []string{"pjsip"}
+	serverConfig.Asterisk.EndpointStacks = []string{"pjsip"}
+	serverConfig.Asterisk.Codecs = []string{"ulaw"}
+	serverConfig.Asterisk.Capabilities.Fax = true
+	serverConfig.Asterisk.Capabilities.BrowserCalling = true
+	serverConfig.Asterisk.Subsystems.FaxBackend = "hylafax+"
+	serverConfig.Asterisk.Subsystems.MessagingBackend = "xmpp"
+
+	state := asteriskState(serverConfig)
+	if state.MinimumSupportedVersion != "12" || state.DetectedVersion != "20.5.1" || len(state.Subsystems) == 0 {
+		t.Fatalf("unexpected asterisk state %+v", state)
+	}
+	if firstNonEmpty("", "value") != "value" || firstNonEmpty("", "") != "" {
+		t.Fatalf("unexpected firstNonEmpty helper")
 	}
 }

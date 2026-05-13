@@ -17,13 +17,19 @@ type APIAuthHandler struct {
 }
 
 type APIUserHandler struct {
-	routePrefix string
-	authService service.AuthService
+	routePrefix          string
+	authService          service.AuthService
+	domainService        service.DomainService
+	communicationService service.UserCommunicationsService
 }
 
 type APIAdminHandler struct {
-	routePrefix string
-	authService service.AuthService
+	routePrefix     string
+	authService     service.AuthService
+	domainService   service.DomainService
+	asteriskService service.AsteriskService
+	pbxService      service.PBXService
+	operatorService service.OperatorService
 }
 
 func NewAPIAuthHandler(routePrefix string, authService service.AuthService, registrationMode model.RegistrationMode) http.Handler {
@@ -34,17 +40,31 @@ func NewAPIAuthHandler(routePrefix string, authService service.AuthService, regi
 	}
 }
 
-func NewAPIUserHandler(routePrefix string, authService service.AuthService) http.Handler {
+func NewAPIUserHandler(routePrefix string, authService service.AuthService, domainService service.DomainService, communicationService ...service.UserCommunicationsService) http.Handler {
+	var resolvedCommunicationService service.UserCommunicationsService
+	if len(communicationService) > 0 {
+		resolvedCommunicationService = communicationService[0]
+	}
 	return APIUserHandler{
-		routePrefix: routePrefix,
-		authService: authService,
+		routePrefix:          routePrefix,
+		authService:          authService,
+		domainService:        domainService,
+		communicationService: resolvedCommunicationService,
 	}
 }
 
-func NewAPIAdminHandler(routePrefix string, authService service.AuthService) http.Handler {
+func NewAPIAdminHandler(routePrefix string, authService service.AuthService, domainService service.DomainService, asteriskService service.AsteriskService, pbxService service.PBXService, operatorService ...service.OperatorService) http.Handler {
+	var resolvedOperatorService service.OperatorService
+	if len(operatorService) > 0 {
+		resolvedOperatorService = operatorService[0]
+	}
 	return APIAdminHandler{
-		routePrefix: routePrefix,
-		authService: authService,
+		routePrefix:     routePrefix,
+		authService:     authService,
+		domainService:   domainService,
+		asteriskService: asteriskService,
+		pbxService:      pbxService,
+		operatorService: resolvedOperatorService,
 	}
 }
 
@@ -186,7 +206,8 @@ func (handler APIAuthHandler) handleRefresh(w http.ResponseWriter, r *http.Reque
 }
 
 func (handler APIUserHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+	relativePath := routeTail(handler.routePrefix, r.URL.Path)
+	if (relativePath == "" || relativePath == "profile") && r.Method != http.MethodGet && r.Method != http.MethodHead {
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
@@ -197,7 +218,7 @@ func (handler APIUserHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	switch routeTail(handler.routePrefix, r.URL.Path) {
+	switch relativePath {
 	case "", "profile":
 		writeJSON(w, http.StatusOK, map[string]any{
 			"username":      user.Username,
@@ -209,6 +230,14 @@ func (handler APIUserHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) 
 			"expires_at":    formatOptionalTime(tokenRecord.ExpiresAt),
 		})
 	default:
+		if route, ok := parseUserCommunicationRoute(relativePath); ok {
+			handler.handleUserCommunicationSurface(w, r, route, user, tokenRecord.TokenPrefix, tokenRecord.Scope)
+			return
+		}
+		if relativePath == "domains" || strings.HasPrefix(relativePath, "domains/") {
+			handler.handleDomainSurface(w, r, user)
+			return
+		}
 		http.NotFound(w, r)
 	}
 }
@@ -219,11 +248,15 @@ func (handler APIAdminHandler) ServeHTTP(w http.ResponseWriter, r *http.Request)
 		handler.handleRoot(w, r)
 	case "profile", "profile/security":
 		handler.handleProfile(w, r)
-	case "server", "server/asterisk", "server/asterisk/fax":
+	case "server":
 		handler.handleProtectedSurface(w, r, relativePath)
 	default:
-		if strings.Contains(handler.routePrefix, "/asterisk") && relativePath != "" {
-			handler.handleProtectedSurface(w, r, relativePath)
+		if _, isAsteriskRoute := normalizeAsteriskRoute(handler.routePrefix, relativePath); isAsteriskRoute {
+			handler.handleAsteriskSurface(w, r, relativePath)
+			return
+		}
+		if relativePath == "server/domains" || strings.HasPrefix(relativePath, "server/domains/") {
+			handler.handleDomainSurface(w, r, relativePath)
 			return
 		}
 		if relativePath == "server/settings" || relativePath == "server/users" || relativePath == "server/security/auth" {

@@ -6,6 +6,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 )
 
 type failingRandomReader struct{}
@@ -497,6 +498,63 @@ func TestConfigStringAndRandomFallback(t *testing.T) {
 
 	if fallbackPort := randomHighPort(); fallbackPort != 64580 {
 		t.Fatalf("expected fallback port, got %d", fallbackPort)
+	}
+}
+
+func TestCustomDomainConfigDefaultsAndValidation(t *testing.T) {
+	defaultConfig := DefaultConfig()
+	if defaultConfig.Server.Features.CustomDomains.MaxDomainsPerUser != 5 || defaultConfig.Server.Features.CustomDomains.VerificationTTL != 24*time.Hour {
+		t.Fatalf("unexpected custom domain defaults %+v", defaultConfig.Server.Features.CustomDomains)
+	}
+
+	configValue := DefaultConfig()
+	configValue.Server.Features.CustomDomains.MaxDomainsPerUser = -1
+	configValue.Server.Features.CustomDomains.MaxDomainsPerOrg = -1
+	configValue.Server.Features.CustomDomains.VerificationTTL = 0
+	configValue.Server.Features.CustomDomains.SSLRenewalDays = 0
+	configValue.Server.Features.CustomDomains.Reserved = nil
+	configValue.Server.Features.CustomDomains.BlockedPatterns = nil
+
+	warnings := configValue.Validate()
+	if len(warnings) < 6 {
+		t.Fatalf("expected custom domain validation warnings, got %+v", warnings)
+	}
+	if configValue.Server.Features.CustomDomains.MaxDomainsPerUser != defaultConfig.Server.Features.CustomDomains.MaxDomainsPerUser {
+		t.Fatalf("expected user limit reset to default")
+	}
+	if !slices.Equal(configValue.Server.Features.CustomDomains.Reserved, defaultConfig.Server.Features.CustomDomains.Reserved) {
+		t.Fatalf("expected reserved domains reset to default")
+	}
+}
+
+func TestAsteriskConfigDefaultsAndValidation(t *testing.T) {
+	defaultConfig := DefaultConfig()
+	if defaultConfig.Server.Asterisk.MinimumSupportedVersion != "12" || defaultConfig.Server.Asterisk.Subsystems.TTSEngine != "flite" {
+		t.Fatalf("unexpected asterisk defaults %+v", defaultConfig.Server.Asterisk)
+	}
+
+	configValue := DefaultConfig()
+	configValue.Server.Asterisk.MinimumSupportedVersion = ""
+	configValue.Server.Asterisk.DetectionStatus = "broken"
+	configValue.Server.Asterisk.HealthStatus = "bad"
+	configValue.Server.Asterisk.ChannelDrivers = nil
+	configValue.Server.Asterisk.EndpointStacks = nil
+	configValue.Server.Asterisk.Codecs = nil
+	configValue.Server.Asterisk.Subsystems.TTSEngine = ""
+	configValue.Server.Asterisk.Subsystems.MusicOnHoldSources = "invalid"
+
+	warnings := configValue.Validate()
+	if len(warnings) < 5 {
+		t.Fatalf("expected asterisk validation warnings, got %+v", warnings)
+	}
+	if configValue.Server.Asterisk.MinimumSupportedVersion != defaultConfig.Server.Asterisk.MinimumSupportedVersion {
+		t.Fatalf("expected minimum supported version reset to default")
+	}
+	if configValue.Server.Asterisk.DetectionStatus != defaultConfig.Server.Asterisk.DetectionStatus || configValue.Server.Asterisk.HealthStatus != defaultConfig.Server.Asterisk.HealthStatus {
+		t.Fatalf("expected asterisk statuses reset to defaults")
+	}
+	if configValue.Server.Asterisk.Subsystems.TTSEngine != "flite" || configValue.Server.Asterisk.Subsystems.MusicOnHoldSources != "local" {
+		t.Fatalf("expected asterisk subsystem defaults restored")
 	}
 }
 

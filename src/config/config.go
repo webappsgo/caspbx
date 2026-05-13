@@ -6,6 +6,7 @@ import (
 	"io"
 	"math/big"
 	"slices"
+	"time"
 )
 
 var randomHighPortReader io.Reader = rand.Reader
@@ -30,6 +31,8 @@ type ServerConfig struct {
 	Contact        ContactConfig
 	Tracking       TrackingConfig
 	Maintenance    MaintenanceConfig
+	Asterisk       AsteriskConfig
+	Features       FeatureConfig
 }
 
 type RequestLimitsConfig struct {
@@ -122,6 +125,62 @@ type MaintenanceNotifyConfig struct {
 	OnExit  bool
 }
 
+type AsteriskConfig struct {
+	MinimumSupportedVersion string
+	DetectedVersion         string
+	DetectionStatus         string
+	HealthStatus            string
+	ChannelDrivers          []string
+	EndpointStacks          []string
+	Codecs                  []string
+	Capabilities            AsteriskCapabilityConfig
+	Subsystems              AsteriskSubsystemConfig
+}
+
+type AsteriskCapabilityConfig struct {
+	Queues           bool
+	Conferences      bool
+	Recordings       bool
+	Voicemail        bool
+	Prompts          bool
+	MusicOnHold      bool
+	Fax              bool
+	XMPP             bool
+	Presence         bool
+	DAHDI            bool
+	BrowserCalling   bool
+	TLS              bool
+	MailDelivery     bool
+	Metrics          bool
+	Scheduler        bool
+	DomainAutomation bool
+}
+
+type AsteriskSubsystemConfig struct {
+	FaxBackend         string
+	MessagingBackend   string
+	TTSEngine          string
+	MusicOnHoldSources string
+}
+
+type FeatureConfig struct {
+	CustomDomains CustomDomainsFeatureConfig
+}
+
+type CustomDomainsFeatureConfig struct {
+	Enabled           bool
+	MaxDomainsPerUser int
+	MaxDomainsPerOrg  int
+	RequireSSL        bool
+	AllowApex         bool
+	AllowSubdomain    bool
+	AllowWildcard     bool
+	VerificationTTL   time.Duration
+	SSLRenewalDays    int
+	Reserved          []string
+	BlockedPatterns   []string
+}
+
 func DefaultConfig() Config {
 	return Config{
 		Server: ServerConfig{
@@ -198,6 +257,48 @@ func DefaultConfig() Config {
 				Notify: MaintenanceNotifyConfig{
 					OnEnter: true,
 					OnExit:  true,
+				},
+			},
+			Asterisk: AsteriskConfig{
+				MinimumSupportedVersion: "12",
+				DetectionStatus:         "pending",
+				HealthStatus:            "unknown",
+				ChannelDrivers:          []string{},
+				EndpointStacks:          []string{},
+				Codecs:                  []string{},
+				Capabilities: AsteriskCapabilityConfig{
+					Recordings:  true,
+					Voicemail:   true,
+					Prompts:     true,
+					MusicOnHold: true,
+					Scheduler:   true,
+				},
+				Subsystems: AsteriskSubsystemConfig{
+					TTSEngine:          "flite",
+					MusicOnHoldSources: "local",
+				},
+			},
+			Features: FeatureConfig{
+				CustomDomains: CustomDomainsFeatureConfig{
+					Enabled:           false,
+					MaxDomainsPerUser: 5,
+					MaxDomainsPerOrg:  20,
+					RequireSSL:        true,
+					AllowApex:         true,
+					AllowSubdomain:    true,
+					AllowWildcard:     false,
+					VerificationTTL:   24 * time.Hour,
+					SSLRenewalDays:    7,
+					Reserved: []string{
+						"localhost",
+						"*.local",
+						"*.test",
+						"*.example",
+						"*.invalid",
+					},
+					BlockedPatterns: []string{
+						`.*\.(gov|mil|edu)$`,
+					},
 				},
 			},
 		},
@@ -344,6 +445,59 @@ func (configValue *Config) Validate() []string {
 	}
 	if configValue.Server.Contact.General.Email == "" {
 		configValue.Server.Contact.General.Email = configValue.Server.Contact.Admin.Email
+	}
+	if configValue.Server.Asterisk.MinimumSupportedVersion == "" {
+		configValue.Server.Asterisk.MinimumSupportedVersion = defaultConfig.Server.Asterisk.MinimumSupportedVersion
+		warnings = append(warnings, "server.asterisk.minimum_supported_version invalid, using default")
+	}
+	if !slices.Contains([]string{"pending", "detected", "failed"}, configValue.Server.Asterisk.DetectionStatus) {
+		configValue.Server.Asterisk.DetectionStatus = defaultConfig.Server.Asterisk.DetectionStatus
+		warnings = append(warnings, "server.asterisk.detection_status invalid, using default")
+	}
+	if !slices.Contains([]string{"unknown", "ready", "degraded", "error"}, configValue.Server.Asterisk.HealthStatus) {
+		configValue.Server.Asterisk.HealthStatus = defaultConfig.Server.Asterisk.HealthStatus
+		warnings = append(warnings, "server.asterisk.health_status invalid, using default")
+	}
+	if configValue.Server.Asterisk.ChannelDrivers == nil {
+		configValue.Server.Asterisk.ChannelDrivers = slices.Clone(defaultConfig.Server.Asterisk.ChannelDrivers)
+	}
+	if configValue.Server.Asterisk.EndpointStacks == nil {
+		configValue.Server.Asterisk.EndpointStacks = slices.Clone(defaultConfig.Server.Asterisk.EndpointStacks)
+	}
+	if configValue.Server.Asterisk.Codecs == nil {
+		configValue.Server.Asterisk.Codecs = slices.Clone(defaultConfig.Server.Asterisk.Codecs)
+	}
+	if configValue.Server.Asterisk.Subsystems.TTSEngine == "" {
+		configValue.Server.Asterisk.Subsystems.TTSEngine = defaultConfig.Server.Asterisk.Subsystems.TTSEngine
+		warnings = append(warnings, "server.asterisk.subsystems.tts_engine invalid, using default")
+	}
+	if !slices.Contains([]string{"local", "remote", "mixed"}, configValue.Server.Asterisk.Subsystems.MusicOnHoldSources) {
+		configValue.Server.Asterisk.Subsystems.MusicOnHoldSources = defaultConfig.Server.Asterisk.Subsystems.MusicOnHoldSources
+		warnings = append(warnings, "server.asterisk.subsystems.music_on_hold_sources invalid, using default")
+	}
+	if configValue.Server.Features.CustomDomains.MaxDomainsPerUser < 0 {
+		configValue.Server.Features.CustomDomains.MaxDomainsPerUser = defaultConfig.Server.Features.CustomDomains.MaxDomainsPerUser
+		warnings = append(warnings, "server.features.custom_domains.max_domains_per_user invalid, using default")
+	}
+	if configValue.Server.Features.CustomDomains.MaxDomainsPerOrg < 0 {
+		configValue.Server.Features.CustomDomains.MaxDomainsPerOrg = defaultConfig.Server.Features.CustomDomains.MaxDomainsPerOrg
+		warnings = append(warnings, "server.features.custom_domains.max_domains_per_org invalid, using default")
+	}
+	if configValue.Server.Features.CustomDomains.VerificationTTL <= 0 {
+		configValue.Server.Features.CustomDomains.VerificationTTL = defaultConfig.Server.Features.CustomDomains.VerificationTTL
+		warnings = append(warnings, "server.features.custom_domains.verification_ttl invalid, using default")
+	}
+	if configValue.Server.Features.CustomDomains.SSLRenewalDays <= 0 {
+		configValue.Server.Features.CustomDomains.SSLRenewalDays = defaultConfig.Server.Features.CustomDomains.SSLRenewalDays
+		warnings = append(warnings, "server.features.custom_domains.ssl_renewal_days invalid, using default")
+	}
+	if len(configValue.Server.Features.CustomDomains.Reserved) == 0 {
+		configValue.Server.Features.CustomDomains.Reserved = slices.Clone(defaultConfig.Server.Features.CustomDomains.Reserved)
+		warnings = append(warnings, "server.features.custom_domains.reserved invalid, using default")
+	}
+	if len(configValue.Server.Features.CustomDomains.BlockedPatterns) == 0 {
+		configValue.Server.Features.CustomDomains.BlockedPatterns = slices.Clone(defaultConfig.Server.Features.CustomDomains.BlockedPatterns)
+		warnings = append(warnings, "server.features.custom_domains.blocked_patterns invalid, using default")
 	}
 
 	return warnings

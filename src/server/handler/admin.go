@@ -11,16 +11,28 @@ import (
 )
 
 type AdminHandler struct {
-	routePrefix string
-	authService service.AuthService
-	adminCookie SessionCookieConfig
+	routePrefix     string
+	authService     service.AuthService
+	domainService   service.DomainService
+	asteriskService service.AsteriskService
+	pbxService      service.PBXService
+	operatorService service.OperatorService
+	adminCookie     SessionCookieConfig
 }
 
-func NewAdminHandler(routePrefix string, authService service.AuthService, adminCookie SessionCookieConfig) http.Handler {
+func NewAdminHandler(routePrefix string, authService service.AuthService, domainService service.DomainService, asteriskService service.AsteriskService, pbxService service.PBXService, adminCookie SessionCookieConfig, operatorService ...service.OperatorService) http.Handler {
+	var resolvedOperatorService service.OperatorService
+	if len(operatorService) > 0 {
+		resolvedOperatorService = operatorService[0]
+	}
 	return AdminHandler{
-		routePrefix: routePrefix,
-		authService: authService,
-		adminCookie: adminCookie,
+		routePrefix:     routePrefix,
+		authService:     authService,
+		domainService:   domainService,
+		asteriskService: asteriskService,
+		pbxService:      pbxService,
+		operatorService: resolvedOperatorService,
+		adminCookie:     adminCookie,
 	}
 }
 
@@ -30,11 +42,15 @@ func (handler AdminHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		handler.handleRoot(w, r)
 	case "profile", "profile/security":
 		handler.handleProfile(w, r)
-	case "server", "server/asterisk", "server/asterisk/fax":
+	case "server":
 		handler.handleProtectedSurface(w, r, relativePath)
 	default:
-		if strings.Contains(handler.routePrefix, "/asterisk") && relativePath != "" {
-			handler.handleProtectedSurface(w, r, relativePath)
+		if _, isAsteriskRoute := normalizeAsteriskRoute(handler.routePrefix, relativePath); isAsteriskRoute {
+			handler.handleAsteriskSurface(w, r, relativePath)
+			return
+		}
+		if relativePath == "server/domains" || strings.HasPrefix(relativePath, "server/domains/") {
+			handler.handleDomainSurface(w, r, relativePath)
 			return
 		}
 		if relativePath == "server/settings" || relativePath == "server/users" || relativePath == "server/security/auth" {

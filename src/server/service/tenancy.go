@@ -1,11 +1,13 @@
 package service
 
 import (
+	"context"
 	"errors"
 	"net"
 	"strings"
 
 	"github.com/casapps/caspbx/src/server/model"
+	"github.com/casapps/caspbx/src/server/store"
 )
 
 var (
@@ -49,6 +51,26 @@ func NewTenantResolver(platformHosts []string, bindings []DomainBinding) TenantR
 	}
 
 	return resolver
+}
+
+func NewTenantResolverFromStore(ctx context.Context, platformHosts []string, domainStore store.DomainStore) (TenantResolver, error) {
+	domains, listError := domainStore.ListCustomDomains(ctx)
+	if listError != nil {
+		return TenantResolver{}, listError
+	}
+
+	bindings := make([]DomainBinding, 0, len(domains))
+	for _, domain := range domains {
+		bindings = append(bindings, DomainBinding{
+			Domain:         domain.Domain,
+			TenantID:       domain.TenantID,
+			OrganizationID: domain.OrganizationID,
+			UserID:         domain.UserID,
+			Status:         domain.Status,
+		})
+	}
+
+	return NewTenantResolver(platformHosts, bindings), nil
 }
 
 func (resolver TenantResolver) Resolve(host string) (TenantContext, error) {

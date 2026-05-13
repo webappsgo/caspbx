@@ -14,16 +14,18 @@ import (
 )
 
 type OrgHandler struct {
-	routePrefix string
-	authService service.AuthService
-	orgStore    store.OrganizationStore
-	userCookie  SessionCookieConfig
+	routePrefix   string
+	authService   service.AuthService
+	domainService service.DomainService
+	orgStore      store.OrganizationStore
+	userCookie    SessionCookieConfig
 }
 
 type APIOrgHandler struct {
-	routePrefix string
-	authService service.AuthService
-	orgStore    store.OrganizationStore
+	routePrefix   string
+	authService   service.AuthService
+	domainService service.DomainService
+	orgStore      store.OrganizationStore
 }
 
 type orgAccessContext struct {
@@ -42,31 +44,32 @@ const (
 	orgAccessNotFound
 )
 
-func NewOrgHandler(routePrefix string, authService service.AuthService, orgStore store.OrganizationStore, userCookie SessionCookieConfig) http.Handler {
+func NewOrgHandler(routePrefix string, authService service.AuthService, domainService service.DomainService, orgStore store.OrganizationStore, userCookie SessionCookieConfig) http.Handler {
 	return OrgHandler{
-		routePrefix: routePrefix,
-		authService: authService,
-		orgStore:    orgStore,
-		userCookie:  userCookie,
+		routePrefix:   routePrefix,
+		authService:   authService,
+		domainService: domainService,
+		orgStore:      orgStore,
+		userCookie:    userCookie,
 	}
 }
 
-func NewAPIOrgHandler(routePrefix string, authService service.AuthService, orgStore store.OrganizationStore) http.Handler {
+func NewAPIOrgHandler(routePrefix string, authService service.AuthService, domainService service.DomainService, orgStore store.OrganizationStore) http.Handler {
 	return APIOrgHandler{
-		routePrefix: routePrefix,
-		authService: authService,
-		orgStore:    orgStore,
+		routePrefix:   routePrefix,
+		authService:   authService,
+		domainService: domainService,
+		orgStore:      orgStore,
 	}
 }
 
 func (handler OrgHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	if !allowsReadOnlyMethod(w, r) {
-		return
-	}
-
 	slug, relativePath, found := orgRouteParts(handler.routePrefix, r.URL.Path)
 	if !found {
 		http.NotFound(w, r)
+		return
+	}
+	if relativePath != "domains" && !strings.HasPrefix(relativePath, "domains/") && !allowsReadOnlyMethod(w, r) {
 		return
 	}
 
@@ -79,10 +82,6 @@ func (handler OrgHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case "":
 		handler.writeOrgProfile(w, r, access)
 	case "members":
-		if !access.organizationIsPublic() && !access.hasMember {
-			http.NotFound(w, r)
-			return
-		}
 		handler.writeOrgMembers(w, r, access)
 	case "settings":
 		if !access.hasMember {
@@ -95,18 +94,21 @@ func (handler OrgHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		writeJSON(w, http.StatusOK, orgSettingsResponse(access))
 	default:
+		if relativePath == "domains" || strings.HasPrefix(relativePath, "domains/") {
+			handler.handleDomainSurface(w, r, access, relativePath)
+			return
+		}
 		http.NotFound(w, r)
 	}
 }
 
 func (handler APIOrgHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	if !allowsReadOnlyMethod(w, r) {
-		return
-	}
-
 	slug, relativePath, found := orgRouteParts(handler.routePrefix, r.URL.Path)
 	if !found {
 		http.NotFound(w, r)
+		return
+	}
+	if relativePath != "domains" && !strings.HasPrefix(relativePath, "domains/") && !allowsReadOnlyMethod(w, r) {
 		return
 	}
 
@@ -119,10 +121,6 @@ func (handler APIOrgHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case relativePath == "":
 		writeJSON(w, http.StatusOK, orgProfileResponse(access))
 	case relativePath == "members":
-		if !access.organizationIsPublic() && !access.hasMember {
-			http.NotFound(w, r)
-			return
-		}
 		handler.writeAPIMembers(w, r, access)
 	case relativePath == "settings":
 		if !access.hasMember {
@@ -135,12 +133,12 @@ func (handler APIOrgHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		writeJSON(w, http.StatusOK, orgSettingsResponse(access))
 	case strings.HasPrefix(relativePath, "members/"):
-		if !access.organizationIsPublic() && !access.hasMember {
-			http.NotFound(w, r)
-			return
-		}
 		handler.writeAPIMember(w, r, access, strings.TrimPrefix(relativePath, "members/"))
 	default:
+		if relativePath == "domains" || strings.HasPrefix(relativePath, "domains/") {
+			handler.handleDomainSurface(w, r, access, relativePath)
+			return
+		}
 		http.NotFound(w, r)
 	}
 }
@@ -194,8 +192,8 @@ func (handler APIOrgHandler) resolveAPIOrgAccess(r *http.Request, slug string) (
 		preferences:  preferences,
 	}
 
-	member, hasMember, accessState := handler.resolveAPIMember(r, organization.ID)
-	if accessState == orgAccessAllowed && hasMember {
+	member, hasMember, _ := handler.resolveAPIMember(r, organization.ID)
+	if hasMember {
 		access.member = member
 		access.hasMember = true
 	}
@@ -203,14 +201,8 @@ func (handler APIOrgHandler) resolveAPIOrgAccess(r *http.Request, slug string) (
 	if organization.Visibility == model.OrganizationVisibilityPublic {
 		return access, orgAccessAllowed
 	}
-	if !hasMember {
-		if accessState == orgAccessForbidden {
-			return orgAccessContext{}, orgAccessNotFound
-		}
-		if accessState == orgAccessUnauthorized {
-			return orgAccessContext{}, orgAccessNotFound
-		}
-		return orgAccessContext{}, accessState
+	if !access.hasMember {
+		return orgAccessContext{}, orgAccessNotFound
 	}
 
 	return access, orgAccessAllowed
@@ -291,10 +283,6 @@ func loadOrganizationContext(ctx context.Context, orgStore store.OrganizationSto
 	}
 
 	return organization, savedPreferences, nil
-}
-
-func (access orgAccessContext) organizationIsPublic() bool {
-	return access.organization.Visibility == model.OrganizationVisibilityPublic
 }
 
 func (handler OrgHandler) writeOrgProfile(w http.ResponseWriter, r *http.Request, access orgAccessContext) {
@@ -397,18 +385,18 @@ func organizationMembersResponse(slug string, members []map[string]any) map[stri
 
 func orgProfileResponse(access orgAccessContext) map[string]any {
 	return map[string]any{
-		"slug":            access.organization.Slug,
-		"name":            access.organization.Name,
-		"description":     access.organization.Description,
-		"website":         access.organization.Website,
-		"location":        access.organization.Location,
-		"visibility":      access.organization.Visibility,
-		"show_members":    access.preferences.ShowMembers,
-		"show_activity":   access.preferences.ShowActivity,
-		"allow_invites":   access.preferences.AllowInvites,
-		"member_context":  access.hasMember,
-		"created_at":      access.organization.CreatedAt.UTC().Format(time.RFC3339),
-		"updated_at":      access.organization.UpdatedAt.UTC().Format(time.RFC3339),
+		"slug":           access.organization.Slug,
+		"name":           access.organization.Name,
+		"description":    access.organization.Description,
+		"website":        access.organization.Website,
+		"location":       access.organization.Location,
+		"visibility":     access.organization.Visibility,
+		"show_members":   access.preferences.ShowMembers,
+		"show_activity":  access.preferences.ShowActivity,
+		"allow_invites":  access.preferences.AllowInvites,
+		"member_context": access.hasMember,
+		"created_at":     access.organization.CreatedAt.UTC().Format(time.RFC3339),
+		"updated_at":     access.organization.UpdatedAt.UTC().Format(time.RFC3339),
 	}
 }
 

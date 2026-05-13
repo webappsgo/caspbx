@@ -56,15 +56,29 @@ type DomainConstraints struct {
 }
 
 type CustomDomain struct {
+	ID                 int64
+	TenantID           int64
+	OrganizationID     int64
+	UserID             int64
 	OwnerType          DomainOwnerType
 	OwnerID            int64
 	Domain             string
 	IsWildcard         bool
+	VerificationError  string
+	VerifiedAt         time.Time
+	ResolvedTarget     string
 	SSLProvider        string
+	SSLChallenge       SSLChallenge
+	SSLError           string
+	SSLIssuedAt        time.Time
+	SSLExpiresAt       time.Time
+	SuspensionReason   string
 	Status             DomainStatus
 	VerificationStatus VerificationStatus
 	SSLStatus          SSLStatus
 	SSLEnabled         bool
+	CreatedAt          time.Time
+	UpdatedAt          time.Time
 }
 
 func DefaultDomainConstraints() DomainConstraints {

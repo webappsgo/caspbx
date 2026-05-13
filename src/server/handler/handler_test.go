@@ -164,8 +164,8 @@ func TestAuthUserAndAdminHandlers(t *testing.T) {
 	adminCookie := SessionCookieConfig{Name: "admin_session", Path: "/admin", HTTPOnly: true, Secure: "auto", SameSite: http.SameSiteLaxMode}
 
 	authHandler := NewAuthHandler("/auth", authService, userCookie, model.RegistrationModePrivate)
-	userHandler := NewUserHandler("/users", authService, userCookie)
-	adminHandler := NewAdminHandler("/admin", authService, adminCookie)
+	userHandler := NewUserHandler("/users", authService, testDomainService(), userCookie)
+	adminHandler := NewAdminHandler("/admin", authService, testDomainService(), testAsteriskService(), testPBXService(), adminCookie)
 
 	authOverviewRequest := httptest.NewRequest(http.MethodGet, "/auth", nil)
 	authOverviewResponse := httptest.NewRecorder()
@@ -297,8 +297,15 @@ func TestAuthUserAndAdminHandlers(t *testing.T) {
 	adminSurfaceRequest.AddCookie(adminSessionCookie)
 	adminSurfaceResponse := httptest.NewRecorder()
 	adminHandler.ServeHTTP(adminSurfaceResponse, adminSurfaceRequest)
-	if !strings.Contains(adminSurfaceResponse.Body.String(), "Admin surface: server/asterisk/fax") {
+	if !strings.Contains(adminSurfaceResponse.Body.String(), "Asterisk surface: Fax") {
 		t.Fatalf("unexpected admin surface body %q", adminSurfaceResponse.Body.String())
+	}
+	adminServerSurfaceRequest := httptest.NewRequest(http.MethodGet, "/admin/server", nil)
+	adminServerSurfaceRequest.AddCookie(adminSessionCookie)
+	adminServerSurfaceResponse := httptest.NewRecorder()
+	adminHandler.ServeHTTP(adminServerSurfaceResponse, adminServerSurfaceRequest)
+	if !strings.Contains(adminServerSurfaceResponse.Body.String(), "Admin surface: server") {
+		t.Fatalf("unexpected admin server surface body %q", adminServerSurfaceResponse.Body.String())
 	}
 
 	adminProtectedMethodRequest := httptest.NewRequest(http.MethodPost, "/admin/profile", nil)
@@ -321,9 +328,9 @@ func TestAuthUserAndAdminHandlers(t *testing.T) {
 func TestAPIAuthUserAndAdminHandlers(t *testing.T) {
 	authService := newTestAuthService(t)
 	authAPIHandler := NewAPIAuthHandler("/api/v1/auth", authService, model.RegistrationModePrivate)
-	userAPIHandler := NewAPIUserHandler("/api/v1/users", authService)
-	adminAPIHandler := NewAPIAdminHandler("/api/v1/admin", authService)
-	asteriskAdminAPIHandler := NewAPIAdminHandler("/api/v1/admin/server/asterisk", authService)
+	userAPIHandler := NewAPIUserHandler("/api/v1/users", authService, testDomainService())
+	adminAPIHandler := NewAPIAdminHandler("/api/v1/admin", authService, testDomainService(), testAsteriskService(), testPBXService())
+	asteriskAdminAPIHandler := NewAPIAdminHandler("/api/v1/admin/server/asterisk", authService, testDomainService(), testAsteriskService(), testPBXService())
 
 	overviewRequest := httptest.NewRequest(http.MethodGet, "/api/v1/auth", nil)
 	overviewResponse := httptest.NewRecorder()
@@ -410,12 +417,19 @@ func TestAPIAuthUserAndAdminHandlers(t *testing.T) {
 	if !strings.Contains(adminSurfaceResponse.Body.String(), "\"surface\":\"server/security/auth\"") {
 		t.Fatalf("unexpected admin api surface body %q", adminSurfaceResponse.Body.String())
 	}
+	adminServerRequest := httptest.NewRequest(http.MethodGet, "/api/v1/admin/server", nil)
+	adminServerRequest.Header.Set("Authorization", "Bearer "+adminBearerToken.Value)
+	adminServerResponse := httptest.NewRecorder()
+	adminAPIHandler.ServeHTTP(adminServerResponse, adminServerRequest)
+	if !strings.Contains(adminServerResponse.Body.String(), "\"surface\":\"server\"") {
+		t.Fatalf("unexpected admin api server body %q", adminServerResponse.Body.String())
+	}
 
 	asteriskSurfaceRequest := httptest.NewRequest(http.MethodGet, "/api/v1/admin/server/asterisk/fax", nil)
 	asteriskSurfaceRequest.Header.Set("Authorization", "Bearer "+adminBearerToken.Value)
 	asteriskSurfaceResponse := httptest.NewRecorder()
 	asteriskAdminAPIHandler.ServeHTTP(asteriskSurfaceResponse, asteriskSurfaceRequest)
-	if !strings.Contains(asteriskSurfaceResponse.Body.String(), "\"surface\":\"fax\"") {
+	if !strings.Contains(asteriskSurfaceResponse.Body.String(), "\"key\":\"fax\"") {
 		t.Fatalf("unexpected asterisk admin api body %q", asteriskSurfaceResponse.Body.String())
 	}
 }
@@ -424,8 +438,8 @@ func TestOrgHandlers(t *testing.T) {
 	memoryStore, authService := newTestRuntimeStore(t)
 	userCookie := SessionCookieConfig{Name: "user_session", Path: "/", HTTPOnly: true, Secure: "auto", SameSite: http.SameSiteLaxMode}
 
-	orgHandler := NewOrgHandler("/orgs", authService, memoryStore, userCookie)
-	orgAPIHandler := NewAPIOrgHandler("/api/v1/orgs", authService, memoryStore)
+	orgHandler := NewOrgHandler("/orgs", authService, newEnabledDomainService(memoryStore), memoryStore, userCookie)
+	orgAPIHandler := NewAPIOrgHandler("/api/v1/orgs", authService, newEnabledDomainService(memoryStore), memoryStore)
 
 	_, aliceSession, loginError := authService.AuthenticateUser(context.Background(), "alice", "correct horse battery staple", "127.0.0.1", "curl/8.0")
 	if loginError != nil {
@@ -529,8 +543,8 @@ func TestOrgHandlers(t *testing.T) {
 func TestAPIHandlerAdditionalBranches(t *testing.T) {
 	authService := newTestAuthService(t)
 	authAPIHandler := NewAPIAuthHandler("/api/v1/auth", authService, model.RegistrationModePrivate)
-	userAPIHandler := NewAPIUserHandler("/api/v1/users", authService)
-	adminAPIHandler := NewAPIAdminHandler("/api/v1/admin", authService)
+	userAPIHandler := NewAPIUserHandler("/api/v1/users", authService, testDomainService())
+	adminAPIHandler := NewAPIAdminHandler("/api/v1/admin", authService, testDomainService(), testAsteriskService(), testPBXService())
 
 	badLoginRequest := httptest.NewRequest(http.MethodPost, "/api/v1/auth/login", strings.NewReader("{"))
 	badLoginRequest.Header.Set("Content-Type", "application/json")
@@ -723,7 +737,7 @@ func TestAPIHandlerAdditionalBranches(t *testing.T) {
 	adminAsteriskExactRequest.Header.Set("Authorization", "Bearer "+adminTokenRecord.Value)
 	adminAsteriskExactResponse := httptest.NewRecorder()
 	adminAPIHandler.ServeHTTP(adminAsteriskExactResponse, adminAsteriskExactRequest)
-	if !strings.Contains(adminAsteriskExactResponse.Body.String(), "\"surface\":\"server/asterisk/fax\"") {
+	if !strings.Contains(adminAsteriskExactResponse.Body.String(), "\"key\":\"fax\"") {
 		t.Fatalf("unexpected admin api exact asterisk surface body %q", adminAsteriskExactResponse.Body.String())
 	}
 	adminProtectedMethodRequest := httptest.NewRequest(http.MethodPost, "/api/v1/admin/server/users", nil)
@@ -819,15 +833,15 @@ func (authStore handlerFailingStore) DeleteTokenByHash(context.Context, model.To
 }
 
 type failingOrganizationStore struct {
-	organization model.Organization
-	preferences  model.OrganizationPreferences
-	member       model.OrganizationMember
-	members      []model.OrganizationMember
-	orgError     error
-	prefError    error
+	organization  model.Organization
+	preferences   model.OrganizationPreferences
+	member        model.OrganizationMember
+	members       []model.OrganizationMember
+	orgError      error
+	prefError     error
 	savePrefError error
-	memberError  error
-	listError    error
+	memberError   error
+	listError     error
 }
 
 func (orgStore failingOrganizationStore) SaveOrganization(context.Context, model.Organization) (model.Organization, error) {
@@ -895,8 +909,8 @@ func TestOrgHandlerAdditionalBranches(t *testing.T) {
 	memoryStore, authService := newTestRuntimeStore(t)
 	userCookie := SessionCookieConfig{Name: "user_session", Path: "/", HTTPOnly: true, Secure: "auto", SameSite: http.SameSiteLaxMode}
 
-	orgHandler := NewOrgHandler("/orgs", authService, memoryStore, userCookie).(OrgHandler)
-	orgAPIHandler := NewAPIOrgHandler("/api/v1/orgs", authService, memoryStore).(APIOrgHandler)
+	orgHandler := NewOrgHandler("/orgs", authService, newEnabledDomainService(memoryStore), memoryStore, userCookie).(OrgHandler)
+	orgAPIHandler := NewAPIOrgHandler("/api/v1/orgs", authService, newEnabledDomainService(memoryStore), memoryStore).(APIOrgHandler)
 
 	_, bobSession, bobLoginError := authService.AuthenticateUser(context.Background(), "bob", "correct horse battery staple", "127.0.0.1", "curl/8.0")
 	if bobLoginError != nil {
@@ -965,7 +979,7 @@ func TestOrgHandlerAdditionalBranches(t *testing.T) {
 
 	failingMembersRequest := httptest.NewRequest(http.MethodGet, "/orgs/acme/members", nil)
 	failingMembersResponse := httptest.NewRecorder()
-	NewOrgHandler("/orgs", authService, failingOrganizationStore{
+	NewOrgHandler("/orgs", authService, testDomainService(), failingOrganizationStore{
 		organization: model.Organization{ID: 1, Slug: "acme", Visibility: model.OrganizationVisibilityPublic},
 		preferences:  model.DefaultOrganizationPreferences(),
 		listError:    errors.New("list failed"),
@@ -1046,6 +1060,13 @@ func TestOrgHandlerAdditionalBranches(t *testing.T) {
 	if bobTokenError != nil {
 		t.Fatalf("authenticate bob token: %v", bobTokenError)
 	}
+	bobPublicOrgRequest := httptest.NewRequest(http.MethodGet, "/api/v1/orgs/acme/settings", nil)
+	bobPublicOrgRequest.Header.Set("Authorization", "Bearer "+bobToken.Value)
+	bobPublicOrgResponse := httptest.NewRecorder()
+	orgAPIHandler.ServeHTTP(bobPublicOrgResponse, bobPublicOrgRequest)
+	if bobPublicOrgResponse.Code != http.StatusForbidden {
+		t.Fatalf("expected non-admin public org settings response 403, got %d", bobPublicOrgResponse.Code)
+	}
 	bobPrivateOrgRequest := httptest.NewRequest(http.MethodGet, "/api/v1/orgs/secret/settings", nil)
 	bobPrivateOrgRequest.Header.Set("Authorization", "Bearer "+bobToken.Value)
 	bobPrivateOrgResponse := httptest.NewRecorder()
@@ -1119,6 +1140,9 @@ func TestOrgHandlerAdditionalBranches(t *testing.T) {
 	if _, found := orgHandler.resolveWebMember(invalidSessionRequest, 2); found {
 		t.Fatalf("expected missing web member resolution")
 	}
+	if _, accessState := orgAPIHandler.resolveAPIOrgAccess(httptest.NewRequest(http.MethodGet, "/api/v1/orgs/missing", nil), "missing"); accessState != orgAccessNotFound {
+		t.Fatalf("expected missing api org access state, got %v", accessState)
+	}
 	nonMemberSessionRequest := httptest.NewRequest(http.MethodGet, "/orgs/secret", nil)
 	nonMemberSessionRequest.AddCookie(userCookie.Build(nonMemberSessionRequest, bobSession.Token, bobSession.Session.ExpiresAt))
 	if _, found := orgHandler.resolveWebMember(nonMemberSessionRequest, 2); found {
@@ -1134,8 +1158,15 @@ func TestOrgHandlerAdditionalBranches(t *testing.T) {
 	}(), 2); accessState != orgAccessUnauthorized {
 		t.Fatalf("expected invalid org token auth state, got %v", accessState)
 	}
+	if _, _, accessState := orgAPIHandler.resolveAPIMember(func() *http.Request {
+		request := httptest.NewRequest(http.MethodGet, "/api/v1/orgs/secret", nil)
+		request.Header.Set("Authorization", "Bearer org_cccccccccccccccccccccccccccccccc")
+		return request
+	}(), 2); accessState != orgAccessUnauthorized {
+		t.Fatalf("expected missing stored org token auth state, got %v", accessState)
+	}
 	failingAPIMembersResponse := httptest.NewRecorder()
-	NewAPIOrgHandler("/api/v1/orgs", authService, failingOrganizationStore{
+	NewAPIOrgHandler("/api/v1/orgs", authService, testDomainService(), failingOrganizationStore{
 		organization: model.Organization{ID: 1, Slug: "acme", Visibility: model.OrganizationVisibilityPublic},
 		preferences:  model.DefaultOrganizationPreferences(),
 		listError:    errors.New("list failed"),
@@ -1144,13 +1175,22 @@ func TestOrgHandlerAdditionalBranches(t *testing.T) {
 		t.Fatalf("expected failing api members response 404, got %d", failingAPIMembersResponse.Code)
 	}
 	userLookupFailureResponse := httptest.NewRecorder()
-	NewAPIOrgHandler("/api/v1/orgs", service.NewAuthService(handlerFailingStore{userError: errors.New("missing user")}, service.DefaultSessionConfig()), failingOrganizationStore{
+	NewAPIOrgHandler("/api/v1/orgs", service.NewAuthService(handlerFailingStore{userError: errors.New("missing user")}, service.DefaultSessionConfig()), testDomainService(), failingOrganizationStore{
 		organization: model.Organization{ID: 1, Slug: "acme", Visibility: model.OrganizationVisibilityPublic},
 		preferences:  model.DefaultOrganizationPreferences(),
 		member:       model.OrganizationMember{ID: 1, OrgID: 1, UserID: 1, Role: model.OrganizationRoleOwner},
 	}).ServeHTTP(userLookupFailureResponse, httptest.NewRequest(http.MethodGet, "/api/v1/orgs/acme/members/1", nil))
 	if userLookupFailureResponse.Code != http.StatusNotFound {
 		t.Fatalf("expected failing api member detail response 404, got %d", userLookupFailureResponse.Code)
+	}
+	memberLookupFailureResponse := httptest.NewRecorder()
+	NewAPIOrgHandler("/api/v1/orgs", authService, testDomainService(), failingOrganizationStore{
+		organization: model.Organization{ID: 1, Slug: "acme", Visibility: model.OrganizationVisibilityPublic},
+		preferences:  model.DefaultOrganizationPreferences(),
+		memberError:  errors.New("missing member"),
+	}).ServeHTTP(memberLookupFailureResponse, httptest.NewRequest(http.MethodGet, "/api/v1/orgs/acme/members/1", nil))
+	if memberLookupFailureResponse.Code != http.StatusNotFound {
+		t.Fatalf("expected failing api member lookup response 404, got %d", memberLookupFailureResponse.Code)
 	}
 	if _, _, found := orgRouteParts("/orgs", "/orgs/ /members"); found {
 		t.Fatalf("expected blank org slug route parts to be rejected")
@@ -1260,7 +1300,7 @@ func TestAdminAndUserHandlerAdditionalBranches(t *testing.T) {
 	userCookie := SessionCookieConfig{Name: "user_session", Path: "/", HTTPOnly: true, Secure: "auto", SameSite: http.SameSiteLaxMode}
 	adminCookie := SessionCookieConfig{Name: "admin_session", Path: "/admin", HTTPOnly: true, Secure: "auto", SameSite: http.SameSiteLaxMode}
 
-	adminHandler := NewAdminHandler("/admin", authService, adminCookie)
+	adminHandler := NewAdminHandler("/admin", authService, testDomainService(), testAsteriskService(), testPBXService(), adminCookie)
 	adminLoginInvalidRequest := httptest.NewRequest(http.MethodPost, "/admin", strings.NewReader("{"))
 	adminLoginInvalidRequest.Header.Set("Content-Type", "application/json")
 	adminLoginInvalidResponse := httptest.NewRecorder()
@@ -1313,7 +1353,7 @@ func TestAdminAndUserHandlerAdditionalBranches(t *testing.T) {
 		adminError: errors.New("admin missing"),
 		session:    model.Session{ID: "s1", Kind: model.SessionKindAdmin, SubjectID: 1, TokenHash: service.HashToken("token")},
 	}, service.DefaultSessionConfig())
-	adminLookupFailureHandler := NewAdminHandler("/admin", adminLookupFailureService, adminCookie)
+	adminLookupFailureHandler := NewAdminHandler("/admin", adminLookupFailureService, testDomainService(), testAsteriskService(), testPBXService(), adminCookie)
 	adminLookupFailureRequest := httptest.NewRequest(http.MethodGet, "/admin/profile", nil)
 	adminLookupFailureRequest.AddCookie(&http.Cookie{Name: "admin_session", Value: "token"})
 	adminLookupFailureResponse := httptest.NewRecorder()
@@ -1323,7 +1363,7 @@ func TestAdminAndUserHandlerAdditionalBranches(t *testing.T) {
 	}
 
 	userAuthService := newTestAuthService(t)
-	userHandler := NewUserHandler("/users", userAuthService, userCookie)
+	userHandler := NewUserHandler("/users", userAuthService, testDomainService(), userCookie)
 	loginForm := url.Values{"identifier": {"alice"}, "password": {"correct horse battery staple"}}
 	loginRequest := httptest.NewRequest(http.MethodPost, "/auth/login", strings.NewReader(loginForm.Encode()))
 	loginRequest.Header.Set("Content-Type", "application/x-www-form-urlencoded")
@@ -1350,7 +1390,7 @@ func TestAdminAndUserHandlerAdditionalBranches(t *testing.T) {
 		userError: errors.New("user missing"),
 		session:   model.Session{ID: "s2", Kind: model.SessionKindUser, SubjectID: 1, TokenHash: service.HashToken("token")},
 	}, service.DefaultSessionConfig())
-	userLookupFailureHandler := NewUserHandler("/users", userLookupFailureService, userCookie)
+	userLookupFailureHandler := NewUserHandler("/users", userLookupFailureService, testDomainService(), userCookie)
 	userLookupFailureRequest := httptest.NewRequest(http.MethodGet, "/users/profile", nil)
 	userLookupFailureRequest.AddCookie(&http.Cookie{Name: "user_session", Value: "token"})
 	userLookupFailureResponse := httptest.NewRecorder()
@@ -1395,7 +1435,7 @@ func TestDirectHandlerMethodsAndHelpers(t *testing.T) {
 		t.Fatalf("expected form parse failure")
 	}
 
-	adminHandlerValue := NewAdminHandler("/admin", authService, adminCookie).(AdminHandler)
+	adminHandlerValue := NewAdminHandler("/admin", authService, testDomainService(), testAsteriskService(), testPBXService(), adminCookie).(AdminHandler)
 	adminWrongLoginRequest := httptest.NewRequest(http.MethodPost, "/admin", strings.NewReader(url.Values{"username": {"root-admin"}, "password": {"wrong"}}.Encode()))
 	adminWrongLoginRequest.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	adminWrongLoginResponse := httptest.NewRecorder()
@@ -1410,19 +1450,19 @@ func TestDirectHandlerMethodsAndHelpers(t *testing.T) {
 	adminHandlerValue.handleRoot(asteriskLoginResponse, asteriskLoginRequest)
 	adminSessionCookie := asteriskLoginResponse.Result().Cookies()[0]
 
-	asteriskHandlerValue := NewAdminHandler("/admin/server/asterisk", authService, adminCookie).(AdminHandler)
+	asteriskHandlerValue := NewAdminHandler("/admin/server/asterisk", authService, testDomainService(), testAsteriskService(), testPBXService(), adminCookie).(AdminHandler)
 	asteriskRequest := httptest.NewRequest(http.MethodGet, "/admin/server/asterisk/fax", nil)
 	asteriskRequest.AddCookie(adminSessionCookie)
 	asteriskResponse := httptest.NewRecorder()
 	asteriskHandlerValue.ServeHTTP(asteriskResponse, asteriskRequest)
-	if !strings.Contains(asteriskResponse.Body.String(), "Admin surface: fax") {
+	if !strings.Contains(asteriskResponse.Body.String(), "Asterisk surface: Fax") {
 		t.Fatalf("unexpected asterisk direct surface %q", asteriskResponse.Body.String())
 	}
 
 	adminResolveFailureHandler := NewAdminHandler("/admin", service.NewAuthService(handlerFailingStore{
 		adminError: errors.New("admin missing"),
 		session:    model.Session{ID: "s1", Kind: model.SessionKindAdmin, SubjectID: 1, TokenHash: service.HashToken("token"), ExpiresAt: time.Unix(2_000_000_000, 0)},
-	}, service.DefaultSessionConfig()), adminCookie).(AdminHandler)
+	}, service.DefaultSessionConfig()), testDomainService(), testAsteriskService(), testPBXService(), adminCookie).(AdminHandler)
 	if _, _, ok := adminResolveFailureHandler.resolveAdmin(func() *http.Request {
 		request := httptest.NewRequest(http.MethodGet, "/admin/profile", nil)
 		request.AddCookie(&http.Cookie{Name: "admin_session", Value: "token"})
@@ -1440,7 +1480,7 @@ func TestDirectHandlerMethodsAndHelpers(t *testing.T) {
 	userHandlerValue := NewUserHandler("/users", service.NewAuthService(handlerFailingStore{
 		userError: errors.New("user missing"),
 		session:   model.Session{ID: "s2", Kind: model.SessionKindUser, SubjectID: 1, TokenHash: service.HashToken("token"), ExpiresAt: time.Unix(2_000_000_000, 0)},
-	}, service.DefaultSessionConfig()), userCookie).(UserHandler)
+	}, service.DefaultSessionConfig()), testDomainService(), userCookie).(UserHandler)
 	userLookupFailureRequest := httptest.NewRequest(http.MethodGet, "/users/profile", nil)
 	userLookupFailureRequest.AddCookie(&http.Cookie{Name: "user_session", Value: "token"})
 	userLookupFailureResponse := httptest.NewRecorder()
@@ -1493,7 +1533,7 @@ func TestDirectHandlerMethodsAndHelpers(t *testing.T) {
 			TokenPrefix: "adm_aaaa",
 			ExpiresAt:   time.Unix(2_000_000_000, 0),
 		},
-	}, service.DefaultSessionConfig())).(APIAdminHandler)
+	}, service.DefaultSessionConfig()), testDomainService(), testAsteriskService(), testPBXService()).(APIAdminHandler)
 	if _, _, ok := apiAdminResolveFailureHandler.resolveAdmin(func() *http.Request {
 		request := httptest.NewRequest(http.MethodGet, "/api/v1/admin/profile", nil)
 		request.Header.Set("Authorization", "Bearer adm_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
@@ -1503,7 +1543,7 @@ func TestDirectHandlerMethodsAndHelpers(t *testing.T) {
 	}
 	apiAdminTokenResolveFailureHandler := NewAPIAdminHandler("/api/v1/admin", service.NewAuthService(handlerFailingStore{
 		tokenError: errors.New("token missing"),
-	}, service.DefaultSessionConfig())).(APIAdminHandler)
+	}, service.DefaultSessionConfig()), testDomainService(), testAsteriskService(), testPBXService()).(APIAdminHandler)
 	if _, _, ok := apiAdminTokenResolveFailureHandler.resolveAdmin(func() *http.Request {
 		request := httptest.NewRequest(http.MethodGet, "/api/v1/admin/profile", nil)
 		request.Header.Set("Authorization", "Bearer adm_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
@@ -1528,7 +1568,7 @@ func TestDirectHandlerMethodsAndHelpers(t *testing.T) {
 			TokenPrefix: "usr_aaaa",
 			ExpiresAt:   time.Unix(2_000_000_000, 0),
 		},
-	}, service.DefaultSessionConfig())).(APIUserHandler)
+	}, service.DefaultSessionConfig()), testDomainService()).(APIUserHandler)
 	if _, _, ok := apiUserResolveFailureHandler.resolveUser(func() *http.Request {
 		request := httptest.NewRequest(http.MethodGet, "/api/v1/users/profile", nil)
 		request.Header.Set("Authorization", "Bearer usr_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
@@ -1673,4 +1713,76 @@ func newTestRuntimeStore(t *testing.T) (*store.MemoryStore, service.AuthService)
 	}
 
 	return memoryStore, service.NewAuthService(memoryStore, service.DefaultSessionConfig())
+}
+
+func testDomainService() service.DomainService {
+	return newEnabledDomainService(store.NewMemoryStore())
+}
+
+func testAsteriskService() service.AsteriskService {
+	memoryStore := store.NewMemoryStore()
+	_, _ = memoryStore.SaveAsteriskState(context.Background(), model.AsteriskState{
+		MinimumSupportedVersion: "12",
+		DetectedVersion:         "20.5.1",
+		DetectionStatus:         "detected",
+		HealthStatus:            model.AsteriskHealthReady,
+		ChannelDrivers:          []string{"pjsip"},
+		EndpointStacks:          []string{"pjsip"},
+		Codecs:                  []string{"ulaw", "alaw"},
+		Capabilities: []model.AsteriskCapability{
+			{Key: "recordings", Label: "Recordings", Family: "media", Available: true},
+			{Key: "voicemail", Label: "Voicemail", Family: "media", Available: true},
+			{Key: "prompts", Label: "Prompts", Family: "media", Available: true},
+			{Key: "music_on_hold", Label: "Music on Hold", Family: "media", Available: true},
+			{Key: "fax", Label: "Fax", Family: "fax", Available: true},
+			{Key: "queues", Label: "Queues", Family: "queue", Available: true},
+			{Key: "conferences", Label: "Conferences", Family: "conference", Available: true},
+			{Key: "browser_calling", Label: "Browser Calling", Family: "webphone", Available: true},
+			{Key: "tls", Label: "TLS", Family: "security", Available: true},
+			{Key: "presence", Label: "Presence", Family: "messaging", Available: true},
+		},
+		Subsystems: []model.AsteriskManagedSubsystem{
+			{Key: "fax_backend", Label: "Fax backend", Provider: "hylafax+", Healthy: true},
+			{Key: "tts_engine", Label: "TTS engine", Provider: "flite", Healthy: true},
+			{Key: "music_on_hold", Label: "Music on hold", Provider: "mixed", Healthy: true},
+			{Key: "messaging_backend", Label: "Messaging backend", Provider: "xmpp", Healthy: true},
+		},
+	})
+	return service.NewAsteriskService(memoryStore)
+}
+
+func testPBXService() service.PBXService {
+	memoryStore := store.NewMemoryStore()
+	_, _ = memoryStore.SaveAsteriskState(context.Background(), model.AsteriskState{
+		MinimumSupportedVersion: "12",
+		DetectionStatus:         "detected",
+		HealthStatus:            model.AsteriskHealthReady,
+		ChannelDrivers:          []string{"pjsip"},
+		EndpointStacks:          []string{"pjsip"},
+		Capabilities: []model.AsteriskCapability{
+			{Key: "queues", Available: true},
+			{Key: "conferences", Available: true},
+			{Key: "prompts", Available: true},
+		},
+	})
+	pbxService := service.NewPBXService(memoryStore, memoryStore)
+	_, _ = pbxService.CreateExtension(context.Background(), model.Extension{Number: "1000", DisplayName: "Alice", Technology: "pjsip", Endpoint: "alice"})
+	_, _ = pbxService.CreateQueue(context.Background(), model.Queue{Name: "Support", Strategy: "ringall"})
+	return pbxService
+}
+
+func newEnabledDomainService(domainStore store.DomainStore) service.DomainService {
+	return service.NewDomainService(domainStore, model.DomainConstraints{
+		Enabled:           true,
+		MaxDomainsPerUser: 5,
+		MaxDomainsPerOrg:  20,
+		RequireSSL:        true,
+		AllowApex:         true,
+		AllowSubdomain:    true,
+		AllowWildcard:     false,
+		VerificationTTL:   24 * time.Hour,
+		SSLRenewalDays:    7,
+		Reserved:          []string{"localhost", "*.local", "*.test", "*.example", "*.invalid"},
+		BlockedPatterns:   []string{`.*\.(gov|mil|edu)$`},
+	}, []string{"example.invalid"}, nil)
 }

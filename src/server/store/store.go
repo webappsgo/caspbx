@@ -19,7 +19,47 @@ type TenantLookup interface {
 }
 
 type DomainLookup interface {
-	FindDomainByHost(context.Context, string) (int64, error)
+	FindDomainByHost(context.Context, string) (model.CustomDomain, error)
+}
+
+type DomainStore interface {
+	DomainLookup
+	SaveCustomDomain(context.Context, model.CustomDomain) (model.CustomDomain, error)
+	FindCustomDomainByID(context.Context, int64) (model.CustomDomain, error)
+	FindCustomDomainByDomain(context.Context, string) (model.CustomDomain, error)
+	ListCustomDomains(context.Context) ([]model.CustomDomain, error)
+	ListCustomDomainsByOwner(context.Context, model.DomainOwnerType, int64) ([]model.CustomDomain, error)
+	DeleteCustomDomainByID(context.Context, int64) error
+}
+
+type AsteriskStore interface {
+	SaveAsteriskState(context.Context, model.AsteriskState) (model.AsteriskState, error)
+	GetAsteriskState(context.Context) (model.AsteriskState, error)
+}
+
+type PBXStore interface {
+	SavePBXPlan(context.Context, model.PBXPlan) (model.PBXPlan, error)
+	GetPBXPlan(context.Context) (model.PBXPlan, error)
+}
+
+type CommunicationStore interface {
+	SaveUserCommunicationSettings(context.Context, model.UserCommunicationSettings) (model.UserCommunicationSettings, error)
+	FindUserCommunicationSettings(context.Context, int64) (model.UserCommunicationSettings, error)
+	SaveUserContact(context.Context, model.UserContact) (model.UserContact, error)
+	FindUserContact(context.Context, int64, int64) (model.UserContact, error)
+	ListUserContacts(context.Context, int64) ([]model.UserContact, error)
+	DeleteUserContact(context.Context, int64, int64) error
+	SaveUserVoicemail(context.Context, model.UserVoicemail) (model.UserVoicemail, error)
+	ListUserVoicemails(context.Context, int64) ([]model.UserVoicemail, error)
+	SaveUserCallRecord(context.Context, model.UserCallRecord) (model.UserCallRecord, error)
+	ListUserCallRecords(context.Context, int64) ([]model.UserCallRecord, error)
+	SaveUserMessage(context.Context, model.UserMessage) (model.UserMessage, error)
+	ListUserMessages(context.Context, int64) ([]model.UserMessage, error)
+}
+
+type OperatorStore interface {
+	SaveOperatorRuntimeState(context.Context, model.OperatorRuntimeState) (model.OperatorRuntimeState, error)
+	GetOperatorRuntimeState(context.Context) (model.OperatorRuntimeState, error)
 }
 
 type AdminCredentialStore interface {
@@ -69,4 +109,9 @@ type AuthStore interface {
 type RuntimeStore interface {
 	AuthStore
 	OrganizationStore
+	DomainStore
+	AsteriskStore
+	PBXStore
+	CommunicationStore
+	OperatorStore
 }
